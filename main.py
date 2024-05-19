@@ -239,8 +239,8 @@ async def main():
     await bot.set_my_commands(
         commands=[
             telebot.types.BotCommand("start", "Start"),
-            telebot.types.BotCommand("gemini", "using model:gemini-pro-1.0"),
-            telebot.types.BotCommand("gemini_pro", "using model:gemini-pro-1.5"),
+            telebot.types.BotCommand("cheggAi", "using model:CheggAi"),
+            telebot.types.BotCommand("CheggAi_pro", "using model:CheggAi_pro"),
             telebot.types.BotCommand("clear", "Clear all history"),
             telebot.types.BotCommand("switch","switch default model")
         ],
@@ -255,21 +255,21 @@ async def main():
         except IndexError:
             await bot.reply_to(message, error_info)
 
-    @bot.message_handler(commands=["gemini"])
+    @bot.message_handler(commands=["cheggAi"])
     async def gemini_handler(message: Message):
         try:
             m = message.text.strip().split(maxsplit=1)[1].strip()
         except IndexError:
-            await bot.reply_to( message , escape("Please add what you want to say after /gemini. \nFor example: `/gemini Who is john lennon?`"), parse_mode="MarkdownV2")
+            await bot.reply_to( message , escape("Please add what you want to say after /cheggAi. \nFor example: `/cheggAi Who is john lennon?`"), parse_mode="MarkdownV2")
             return
         await gemini(bot,message,m)
 
-    @bot.message_handler(commands=["gemini_pro"])
+    @bot.message_handler(commands=["cheggAi_pro"])
     async def gemini_handler(message: Message):
         try:
             m = message.text.strip().split(maxsplit=1)[1].strip()
         except IndexError:
-            await bot.reply_to( message , escape("Please add what you want to say after /gemini_pro. \nFor example: `/gemini_pro Who is john lennon?`"), parse_mode="MarkdownV2")
+            await bot.reply_to( message , escape("Please add what you want to say after /cheggAi_pro. \nFor example: `/cheggAi_pro Who is john lennon?`"), parse_mode="MarkdownV2")
             return
         await gemini_pro(bot,message,m)
             
@@ -290,14 +290,14 @@ async def main():
         # Check if the player is already in default_model_dict.
         if str(message.from_user.id) not in default_model_dict:
             default_model_dict[str(message.from_user.id)] = False
-            await bot.reply_to( message , "Now you are using gemini-pro:1.5")
+            await bot.reply_to( message , "Now you are using cheggAi-pro:1.5")
             return
         if default_model_dict[str(message.from_user.id)] == True:
             default_model_dict[str(message.from_user.id)] = False
-            await bot.reply_to( message , "Now you are using gemini-pro:1.5")
+            await bot.reply_to( message , "Now you are using cheggAi-pro:1.5")
         else:
             default_model_dict[str(message.from_user.id)] = True
-            await bot.reply_to( message , "Now you are using gemini-pro:1.0")
+            await bot.reply_to( message , "Now you are using cheggAi-pro:1.0")
         
     
     
@@ -319,7 +319,7 @@ async def main():
     async def gemini_photo_handler(message: Message) -> None:
         if message.chat.type != "private":
             s = message.caption
-            if not s or not (s.startswith("/gemini")):
+            if not s or not (s.startswith("/cheggAi")):
                 return
             try:
                 prompt = s.strip().split(maxsplit=1)[1].strip() if len(s.strip().split(maxsplit=1)) > 1 else ""
