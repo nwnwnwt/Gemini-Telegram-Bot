@@ -1,4 +1,4 @@
-import argparse
+'''import argparse
 import traceback
 import asyncio
 import google.generativeai as genai
@@ -368,3 +368,300 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+'''
+
+import argparse
+import traceback
+import asyncio
+import google.generativeai as genai
+import re
+import telebot
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import Message
+
+gemini_player_dict = {}
+gemini_pro_player_dict = {}
+default_model_dict = {}
+
+error_info = "⚠️⚠️⚠️\nSomething went wrong!\nPlease try to change your prompt or contact the admin!"
+before_generate_info = "🤖Generating🤖"
+download_pic_notify = "🤖Loading picture🤖"
+
+n = 10  # Number of historical records to keep
+
+generation_config = {
+    "temperature": 1,
+    "top_p": 1,
+    "top_k": 1,
+    "max_output_tokens": 2048,
+}
+
+safety_settings = [
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_NONE"
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_NONE"
+    },
+]
+
+def find_all_index(text, pattern):
+    index_list = [0]
+    for match in re.finditer(pattern, text, re.MULTILINE):
+        if match.group(1) is not None:
+            start = match.start(1)
+            end = match.end(1)
+            index_list += [start, end]
+    index_list.append(len(text))
+    return index_list
+
+def replace_all(text, pattern, function):
+    poslist = [0]
+    strlist = []
+    originstr = []
+    poslist = find_all_index(text, pattern)
+    for i in range(1, len(poslist[:-1]), 2):
+        start, end = poslist[i:i + 2]
+        strlist.append(function(text[start:end]))
+    for i in range(0, len(poslist), 2):
+        j, k = poslist[i:i + 2]
+        originstr.append(text[j:k])
+    if len(strlist) < len(originstr):
+        strlist.append("")
+    else:
+        originstr.append("")
+    new_list = [item for pair in zip(originstr, strlist) for item in pair]
+    return "".join(new_list)
+
+def escapeshape(text):
+    return "▎*" + text.split()[1] + "*"
+
+def escapeminus(text):
+    return "\\" + text
+
+def escapebackquote(text):
+    return r"\`\`"
+
+def escapeplus(text):
+    return "\\" + text
+
+def escape(text, flag=0):
+    text = re.sub(r"\\\[", "@->@", text)
+    text = re.sub(r"\\\]", "@<-@", text)
+    text = re.sub(r"\\\(", "@-->@", text)
+    text = re.sub(r"\\\)", "@<--@", text)
+    if flag:
+        text = re.sub(r"\\\\", "@@@", text)
+    text = re.sub(r"\\", r"\\\\", text)
+    if flag:
+        text = re.sub(r"\@{3}", r"\\\\", text)
+    text = re.sub(r"_", "\_", text)
+    text = re.sub(r"\*{2}(.*?)\*{2}", "@@@\\1@@@", text)
+    text = re.sub(r"\n{1,2}\*\s", "\n\n• ", text)
+    text = re.sub(r"\*", "\*", text)
+    text = re.sub(r"\@{3}(.*?)\@{3}", "*\\1*", text)
+    text = re.sub(r"\!?\[(.*?)\]\((.*?)\)", "@@@\\1@@@^^^\\2^^^", text)
+    text = re.sub(r"\[", "\[", text)
+    text = re.sub(r"\]", "\]", text)
+    text = re.sub(r"\(", "\(", text)
+    text = re.sub(r"\)", "\)", text)
+    text = re.sub(r"\@\-\>\@", "\[", text)
+    text = re.sub(r"\@\<\-\@", "\]", text)
+    text = re.sub(r"\@\-\-\>\@", "\(", text)
+    text = re.sub(r"\@\<\-\-\@", "\)", text)
+    text = re.sub(r"\@{3}(.*?)\@{3}\^{3}(.*?)\^{3}", "[\\1](\\2)", text)
+    text = re.sub(r"~", "\~", text)
+    text = re.sub(r">", "\>", text)
+    text = replace_all(text, r"(^#+\s.+?$)|```[\D\d\s]+?```", escapeshape)
+    text = re.sub(r"#", "\#", text)
+    text = replace_all(
+        text, r"(\+)|\n[\s]*-\s|```[\D\d\s]+?```|`[\D\d\s]*?`", escapeplus
+    )
+    text = re.sub(r"\n{1,2}(\s*)-\s", "\n\n\\1• ", text)
+    text = re.sub(r"\n{1,2}(\s*\d{1,2}\.\s)", "\n\n\\1", text)
+    text = replace_all(
+        text, r"(-)|\n[\s]*-\s|```[\D\d\s]+?```|`[\D\d\s]*?`", escapeminus
+    )
+    text = re.sub(r"```([\D\d\s]+?)```", "@@@\\1@@@", text)
+    text = replace_all(text, r"(``)", escapebackquote)
+    text = re.sub(r"\@{3}([\D\d\s]+?)\@{3}", "```\\1```", text)
+    text = re.sub(r"=", "\=", text)
+    text = re.sub(r"\|", "\|", text)
+    text = re.sub(r"{", "\{", text)
+    text = re.sub(r"}", "\}", text)
+    text = re.sub(r"\.", "\.", text)
+    text = re.sub(r"!", "\!", text)
+    return text
+
+# Prevent "create_convo" function from blocking the event loop.
+async def make_new_gemini_convo():
+    loop = asyncio.get_running_loop()
+
+    def create_convo():
+        model = genai.GenerativeModel(
+            model_name="gemini-pro",
+            generation_config=generation_config,
+            safety_settings=safety_settings,
+        )
+        convo = model.start_chat()
+        return convo
+
+    convo = await loop.run_in_executor(None, create_convo)
+    return convo
+
+async def make_new_gemini_pro_convo():
+    loop = asyncio.get_running_loop()
+
+    def create_convo():
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro-latest",
+            generation_config=generation_config,
+            safety_settings=safety_settings,
+        )
+        convo = model.start_chat()
+        return convo
+
+    convo = await loop.run_in_executor(None, create_convo)
+    return convo
+
+# Prevent "send_message" function from blocking the event loop.
+async def send_message(player, message):
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, player.send_message, message)
+    
+# Prevent "model.generate_content" function from blocking the event loop.
+async def async_generate_content(model, contents):
+    loop = asyncio.get_running_loop()
+
+    def generate():
+        return model.generate_content(contents=contents)
+
+    response = await loop.run_in_executor(None, generate)
+    return response
+
+async def gemini(bot, message, m):
+    player = None
+    if str(message.from_user.id) not in gemini_player_dict:
+        player = await make_new_gemini_convo()
+        gemini_player_dict[str(message.from_user.id)] = player
+    else:
+        player = gemini_player_dict[str(message.from_user.id)]
+    if len(player.history) > n:
+        player.history = player.history[2:]
+    try:
+        sent_message = await bot.reply_to(message, before_generate_info)
+        await send_message(player, m)
+        try:
+            await bot.edit_message_text(escape(player.last.text), chat_id=sent_message.chat.id, message_id=sent_message.message_id, parse_mode="MarkdownV2")
+        except:
+            await bot.edit_message_text(escape(player.last.text), chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+
+    except Exception:
+        traceback.print_exc()
+        await bot.edit_message_text(error_info, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+
+async def gemini_pro(bot, message, m):
+    player = None
+    if str(message.from_user.id) not in gemini_pro_player_dict:
+        player = await make_new_gemini_pro_convo()
+        gemini_pro_player_dict[str(message.from_user.id)] = player
+    else:
+        player = gemini_pro_player_dict[str(message.from_user.id)]
+    if len(player.history) > n:
+        player.history = player.history[2:]
+    try:
+        sent_message = await bot.reply_to(message, before_generate_info)
+        await send_message(player, m)
+        try:
+            await bot.edit_message_text(escape(player.last.text), chat_id=sent_message.chat.id, message_id=sent_message.message_id, parse_mode="MarkdownV2")
+        except:
+            await bot.edit_message_text(escape(player.last.text), chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+
+    except Exception:
+        traceback.print_exc()
+        await bot.edit_message_text(error_info, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+
+async def gemini_pro_pic(bot, message, caption, photo_path):
+    player = None
+    if str(message.from_user.id) not in gemini_pro_player_dict:
+        player = await make_new_gemini_pro_convo()
+        gemini_pro_player_dict[str(message.from_user.id)] = player
+    else:
+        player = gemini_pro_player_dict[str(message.from_user.id)]
+    if len(player.history) > n:
+        player.history = player.history[2:]
+    try:
+        sent_message = await bot.reply_to(message, before_generate_info)
+        with open(photo_path, 'rb') as image_file:
+            contents = {
+                "image": image_file.read(),
+                "text": caption,
+            }
+            response = await async_generate_content(player, contents)
+        try:
+            await bot.edit_message_text(escape(response.text), chat_id=sent_message.chat.id, message_id=sent_message.message_id, parse_mode="MarkdownV2")
+        except:
+            await bot.edit_message_text(escape(response.text), chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+
+    except Exception:
+        traceback.print_exc()
+        await bot.edit_message_text(error_info, chat_id=sent_message.chat.id, message_id=sent_message.message_id)
+
+async def start(default_model_dict, message, bot):
+    default_model_dict[message.from_user.id] = "gemini"
+
+async def handle_image(message: Message):
+    bot = default_model_dict[message.from_user.id]
+    caption = message.caption if message.caption else "Describe the image"
+    photo = await bot.download_file(bot.get_file(message.photo[-1].file_id).file_path)
+    photo_path = f"{message.photo[-1].file_id}.jpg"
+    with open(photo_path, 'wb') as f:
+        f.write(photo)
+    await gemini_pro_pic(bot, message, caption, photo_path)
+
+# Command handling logic for the bot
+async def process_message(message: Message, bot: AsyncTeleBot):
+    user_text = message.text.lower()
+    if user_text.startswith('/start'):
+        await start(default_model_dict, message, bot)
+    elif user_text.startswith('/gemini'):
+        await gemini(bot, message, message.text)
+    elif user_text.startswith('/geminipro'):
+        await gemini_pro(bot, message, message.text)
+    else:
+        await bot.reply_to(message, "Unknown command. Use /start to initialize or /gemini for responses.")
+
+async def run_bot(token: str):
+    bot = AsyncTeleBot(token)
+
+    @bot.message_handler(content_types=['photo'])
+    async def handle_image_message(message: Message):
+        await handle_image(message)
+
+    @bot.message_handler(func=lambda message: True)
+    async def handle_text_message(message: Message):
+        await process_message(message, bot)
+
+    await bot.infinity_polling()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run the Telegram bot.")
+    parser.add_argument('--token', help='Telegram Bot Token', required=True)
+    args = parser.parse_args()
+
+    try:
+        genai.set_api_key('YOUR_API_KEY_HERE')
+        asyncio.run(run_bot(args.token))
+    except Exception as e:
+        traceback.print_exc()
+        print(f"Failed to run bot: {e}")
